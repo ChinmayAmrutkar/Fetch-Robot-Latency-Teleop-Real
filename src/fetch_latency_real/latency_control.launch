@@ -1,0 +1,43 @@
+<!-- latency_control.launch  -->
+<launch>
+  <!-- -------------------------------------------------------------
+       Arguments
+       ------------------------------------------------------------- -->
+  <!-- Delay for the camera image stream (milliseconds)             -->
+  <arg name="delay_ms"         default="0"/>
+  <!-- Virtual-mass (M) and damping (D) gains for the controller    -->
+  <arg name="virtual_mass"     default="2.0"/>
+  <arg name="virtual_damping"  default="6.0"/>
+
+  <!-- -------------------------------------------------------------
+       Delayed-camera node
+       ------------------------------------------------------------- -->
+  <node pkg="fetch_latency_real"
+        type="delayed_camera.py"
+        name="delayed_camera"
+        output="screen">
+    <param name="delay_ms" value="$(arg delay_ms)"/>
+    <!-- Optional: remap input & output topics if you ever change them -->
+    <!--
+    <remap from="/head_camera/rgb/image_raw"
+           to="/head_camera/rgb/image_raw"/>
+    <remap from="/head_camera/rgb/image_raw_delayed"
+           to="/head_camera/rgb/image_raw_delayed"/>
+    -->
+  </node>
+
+  <!-- -------------------------------------------------------------
+       Low-level admittance controller
+       ------------------------------------------------------------- -->
+  <node pkg="fetch_latency_real"
+        type="admittance_controller.py"
+        name="admittance_controller"
+        output="screen">
+    <param name="M" value="$(arg virtual_mass)"/>
+    <param name="D" value="$(arg virtual_damping)"/>
+    <!-- Safety velocity limits (m/s and rad/s)                     -->
+    <param name="max_linear_vel"  value="0.6"/>
+    <param name="max_angular_vel" value="0.8"/>
+  </node>
+</launch>
+
