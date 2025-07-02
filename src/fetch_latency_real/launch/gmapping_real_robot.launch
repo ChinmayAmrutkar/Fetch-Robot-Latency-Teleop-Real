@@ -1,0 +1,33 @@
+<launch>
+    <!--
+      This launch file is for MAPPING ONLY. It starts the robot drivers,
+      the gmapping SLAM algorithm, and RViz with a pre-set configuration
+      to build a map of a new environment.
+    -->
+
+    <!-- 1. Start the physical Fetch robot drivers -->
+    <include file="$(find fetch_bringup)/launch/fetch.launch"/>
+
+    <!-- 2. Run the GMapping SLAM node -->
+    <node name="slam_gmapping" pkg="gmapping" type="slam_gmapping" output="screen">
+        <!-- Remap the laser scan topic -->
+        <remap from="scan" to="base_scan"/>
+
+        <!-- GMapping Parameters -->
+        <param name="base_frame" value="base_link"/>
+        <param name="odom_frame" value="odom"/>
+        <param name="map_update_interval" value="5.0"/>
+        <param name="maxUrange" value="6.0"/>
+        <param name="minimumScore" value="200"/>
+        <param name="linearUpdate" value="0.2"/>
+        <param name="angularUpdate" value="0.2"/>
+        <param name="particles" value="80"/>
+        <param name="delta" value="0.05"/>
+    </node>
+
+    <!-- 3. Start RViz with your mapping configuration -->
+    <!-- This uses gmapping_config.rviz from your package -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find fetch_latency_real)/rviz/gmapping_config.rviz" required="true" />
+
+</launch>
+
