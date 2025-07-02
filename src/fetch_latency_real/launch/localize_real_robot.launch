@@ -1,0 +1,41 @@
+<launch>
+    <!--
+      This launch file is for LOCALIZATION ONLY. It will start the robot,
+      load a map, and run AMCL to determine the robot's pose on the map.
+      It does NOT start the move_base node, so you cannot send Nav Goals yet.
+    -->
+
+    <!-- Argument for the map file, pointing to your package -->
+    <arg name="map_file" default="$(find fetch_latency_real)/maps/my_lab_map.yaml"/>
+
+    <!-- 1. Start the physical Fetch robot drivers -->
+    <include file="$(find fetch_bringup)/launch/fetch.launch"/>
+
+    <!-- 2. Run the map server to load the map -->
+    <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)" />
+
+    <!-- 3. Run the AMCL node for localization -->
+    <node name="amcl" pkg="amcl" type="amcl" output="screen">
+        <!-- Remap the laser scan topic -->
+        <remap from="scan" to="base_scan"/>
+
+        <!-- AMCL Parameters -->
+        <param name="odom_frame_id" value="odom"/>
+        <param name="base_frame_id" value="base_link"/>
+        <param name="global_frame_id" value="map"/>
+        <param name="use_map_topic" value="true"/>
+
+        <!-- Tune these parameters for your environment for best performance -->
+        <param name="min_particles" value="500"/>
+        <param name="max_particles" value="4000"/>
+        <param name="update_min_d" value="0.25"/>
+        <param name="update_min_a" value="0.5"/> <!-- Radians -->
+        <param name="laser_model_type" value="likelihood_field"/>
+        <param name="laser_z_hit" value="0.95"/>
+        <param name="laser_z_rand" value="0.05"/>
+    </node>
+
+    <!-- 4. Start RViz with your navigation configuration -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find fetch_latency_real)/rviz/amcl_config.rviz" required="true" />
+
+</launch>
