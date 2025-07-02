@@ -9,7 +9,7 @@ This repository enables **teleoperation of the real Fetch mobile manipulator** u
 ### 1️⃣ Clone the Repository
 
 ```bash
-git clone [https://github.com/ChinmayAmrutkar/Fetch-Robot-Latency-Teleop-Real.git](https://github.com/ChinmayAmrutkar/Fetch-Robot-Latency-Teleop-Real.git)
+git clone https://github.com/ChinmayAmrutkar/Fetch-Robot-Latency-Teleop-Real.git
 cd Fetch-Robot-Latency-Teleop-Real
 ```
 
