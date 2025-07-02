@@ -1,0 +1,7 @@
+image: /home/fetchuser/chinmay/Fetch-Robot-Latency-Teleop-Real/src/fetch_latency_real/maps/lab.pgm
+resolution: 0.050000
+origin: [-0.544956, -3.566488, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+
