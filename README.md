@@ -74,6 +74,35 @@ Now, use the map you just created to localize the robot and send it autonomous g
     * Click the **"2D Nav Goal"** button in the top toolbar.
     * Click and drag an arrow on the map to set a destination. The robot will begin moving autonomously.
 
+### **🔬 Phase 3: Performance Evaluation against Motion Capture (Mocap)**
+
+To quantitatively measure the accuracy of AMCL, you can compare its pose estimate against a high-precision motion capture system (e.g., Vicon, OptiTrack).
+
+1.  **Hardware Setup:**
+    * Place reflective markers on your Fetch robot in a rigid, asymmetric pattern that the mocap system can see and track.
+    * In your mocap software (e.g., Vicon Tracker, OptiTrack Motive), create a rigid body for the Fetch robot using these markers. Name this body something memorable, like `fetch`.
+
+2.  **Software Setup:**
+    * You need a ROS driver for your mocap system. A very common one is `vrpn_client_ros`. If you don't have it, install it:
+        ```bash
+        sudo apt-get install ros-melodic-vrpn-client-ros
+        ```
+3.  **Run the Experiment:**
+    * **Terminal 1:** Launch the mocap ROS node. The exact launch file depends on your system, but for `vrpn_client_ros` it's typically:
+        ```bash
+        roslaunch vrpn_client_ros sample.launch server:=<IP_OF_MOCAP_PC>
+        ```
+    * **Terminal 2:** Launch your localization file from Phase 2.
+        ```bash
+        roslaunch fetch_latency_real localize_real_robot.launch map_file:=/path/to/your/map.yaml
+        ```
+    * **Terminal 3:** Run your new logging script.
+        ```bash
+        rosrun fetch_latency_real log_mocap_comparison.py
+        ```
+    * **Terminal 4:** Drive the robot around using your `teleop.py` node.
+    * When finished, `Ctrl+C` all the terminals. The comparison data will be saved in `amcl_vs_mocap_log.csv` in your home directory.
+
 ---
 
 ## ⚙️ Manual Teleoperation (Latency-Aware)
