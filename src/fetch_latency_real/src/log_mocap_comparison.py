@@ -4,7 +4,7 @@ import csv
 import os
 import tf
 import math
-from tf.transformations import euler_from_quaternion
+from tf.transformations import euler_from_quaternion,quaternion_from_euler
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
@@ -22,6 +22,7 @@ class MocapComparer:
         # TF frames for AMCL's estimated pose
         self.map_frame = 'map'
         self.base_frame = 'base_link'
+	self.mocap_frame = 'world'
 
         # --- TF LISTENER ---
         self.tf_listener = tf.TransformListener()
@@ -62,26 +63,62 @@ class MocapComparer:
     def processing_loop(self, event):
         """This is our main loop, running at a fixed rate."""
         try:
-            (trans, rot) = self.tf_listener.lookupTransform(self.map_frame, self.base_frame, rospy.Time(0))
+            (amcl_trans, amcl_rot) = self.tf_listener.lookupTransform(self.map_frame, self.base_frame, rospy.Time(0))
+	    amcl_x, amcl_y, amcl_z = amcl_trans
+	    amcl_roll, amcl_pitch, amcl_yaw = euler_from_quaternion(amcl_rot)
+	    #rospy.loginfo("AMCL [x:%.2f, y:%.2f r:%.2f]", amcl_x, amcl_y, amcl_yaw)
+
+   
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.logwarn_throttle(2.0, "TF Exception: Could not get transform from '%s' to '%s'", self.map_frame, self.base_frame)
             return
 
+
+	#try:
+        #    (trans, rot) = self.tf_listener.lookupTransform(self.map_frame, self.mocap_frame, rospy.Time(0))
+	#    _,_,dyaw = rot
+	#    dx, dy, dz = trans
+        #except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+        #    rospy.logwarn_throttle(2.0, "TF Exception: Could not get transform from '%s' to '%s'", self.map_frame, self.mocap_frame)
+        #    return
+
         if self.latest_mocap_pose is None:
             rospy.loginfo_once("Waiting for initial pose from Mocap...")
             return
+	#rospy.loginfo("mocap [x:%.2f, y:%.2f r:%.2f]", mocap.x, initial_mocap.y, mocap_yaw)
+
+
+	 # --- Extract current poses and headings ---
+	_, _, initial_mocap_yaw = euler_from_quaternion([
+            self.initial_mocap_pose.orientation.x,
+            self.initial_mocap_pose.orientation.y,
+            self.initial_mocap_pose.orientation.z,
+            self.initial_mocap_pose.orientation.w
+        ])
+	
+	#dyaw = initial_mocap_yaw-amcl_yaw
+	#dx = self.initial_mocap_pose.position.x - amcl_x
+	#dy = self.initial_mocap_pose.position.y - amcl_y
+	# amcl = 4
+	# mocap 6
+	# dx = 2
+	
 
         if self.initial_amcl_pose is None:
-            self.initial_amcl_pose = {'trans': trans, 'rot': rot}
-            rospy.loginfo("Captured initial AMCL pose from TF.")
+	    #amcl_x = amcl_x + dx	
+	    #amcl_y = amcl_y + dy
+	    #amcl_yaw = amcl_yaw +dyaw 		
+
+	    self.initial_amcl_pose = [amcl_x,amcl_y,amcl_yaw]
+            #self.initial_amcl_pose = {'trans': trans, 'rot': rot}
+            #rospy.loginfo("Captured initial AMCL pose from TF.")
             return
 
-        # --- Extract current poses and headings ---
-        amcl_x, amcl_y, amcl_z = trans
-        mocap_x = self.latest_mocap_pose.position.x
+	
+
+	mocap_x = self.latest_mocap_pose.position.x
         mocap_y = self.latest_mocap_pose.position.y
-        
-        _, _, amcl_yaw = euler_from_quaternion(rot)
+  
         _, _, mocap_yaw = euler_from_quaternion([
             self.latest_mocap_pose.orientation.x,
             self.latest_mocap_pose.orientation.y,
@@ -89,29 +126,43 @@ class MocapComparer:
             self.latest_mocap_pose.orientation.w
         ])
 
-        # --- Calculate relative displacement and error ---
-        init_amcl_x, init_amcl_y, _ = self.initial_amcl_pose['trans']
+
         init_mocap_x = self.initial_mocap_pose.position.x
         init_mocap_y = self.initial_mocap_pose.position.y
-
-        error_x = (amcl_x - init_amcl_x) - (mocap_x - init_mocap_x)
-        error_y = (amcl_y - init_amcl_y) - (mocap_y - init_mocap_y)
-        error_dist = math.sqrt(error_x**2 + error_y**2)
-
-        _, _, initial_amcl_yaw = euler_from_quaternion(self.initial_amcl_pose['rot'])
         _, _, initial_mocap_yaw = euler_from_quaternion([
             self.initial_mocap_pose.orientation.x,
             self.initial_mocap_pose.orientation.y,
             self.initial_mocap_pose.orientation.z,
             self.initial_mocap_pose.orientation.w
         ])
-        
-        amcl_delta_yaw = amcl_yaw - initial_amcl_yaw
-        mocap_delta_yaw = mocap_yaw - initial_mocap_yaw
-        error_yaw = math.atan2(math.sin(amcl_delta_yaw - mocap_delta_yaw), math.cos(amcl_delta_yaw - mocap_delta_yaw))
+
+
+	init_amcl_x,init_amcl_y,initial_amcl_yaw = self.initial_amcl_pose
+	
+
+	mocap_x -= init_mocap_x
+	mocap_y -= init_mocap_y
+	mocap_yaw -= initial_mocap_yaw
+
+	#amcl_x -= init_amcl_x
+	#amcl_y -= init_amcl_y
+	#amcl_yaw -= initial_amcl_yaw
+	#amcl_x,amcl_y = rotate_2d_vector(amcl_x,amcl_y,initial_amcl_yaw)
+	amcl_x = amcl_x - init_amcl_x
+	amcl_y = amcl_y - init_amcl_y
+	amcl_yaw = amcl_yaw - initial_amcl_yaw
+
+	dyaw = initial_mocap_yaw-initial_amcl_yaw
+	amcl_x,amcl_y = rotate_2d_vector(amcl_x,amcl_y,dyaw )
+	
+	error_x = (amcl_x) - (mocap_x)
+        error_y = (amcl_y) - (mocap_y)
+
+        error_dist = math.sqrt(error_x**2 + error_y**2)    
+        error_yaw = math.atan2(math.sin(amcl_yaw - mocap_yaw), math.cos(amcl_yaw - mocap_yaw))
 
         # --- LOGGING TO TERMINAL ---
-        rospy.loginfo("AMCL [x:%.2f, y:%.2f] MOCAP [x:%.2f, y:%.2f] ERR [x:%.2f, y:%.2f]", amcl_x, amcl_y, mocap_x, mocap_y, error_x, error_y)
+        rospy.loginfo("AMCL [x:%.2f, y:%.2f, r:%.2f] MOCAP [x:%.2f, y:%.2f, r:%.2f] ERR [x:%.2f, y:%.2f]", amcl_x, amcl_y, amcl_yaw, mocap_x, mocap_y, mocap_yaw, error_x, error_y)
 
         # --- Write to CSV ---
         self.csv_writer.writerow([
@@ -130,7 +181,8 @@ class MocapComparer:
         amcl_pose_stamped.header.frame_id = self.map_frame
         amcl_pose_stamped.pose.position.x = amcl_x
         amcl_pose_stamped.pose.position.y = amcl_y
-        amcl_pose_stamped.pose.orientation.x, amcl_pose_stamped.pose.orientation.y, amcl_pose_stamped.pose.orientation.z, amcl_pose_stamped.pose.orientation.w = rot
+        #amcl_pose_stamped.pose.orientation.x, amcl_pose_stamped.pose.orientation.y, amcl_pose_stamped.pose.orientation.z, amcl_pose_stamped.pose.orientation.w = rot
+	amcl_pose_stamped.pose.orientation.x, amcl_pose_stamped.pose.orientation.y, amcl_pose_stamped.pose.orientation.z, amcl_pose_stamped.pose.orientation.w = quaternion_from_euler(amcl_roll, amcl_pitch, amcl_yaw)
         self.amcl_path.poses.append(amcl_pose_stamped)
         self.amcl_path.header.stamp = current_time
         self.amcl_path_pub.publish(self.amcl_path)
@@ -140,6 +192,8 @@ class MocapComparer:
         mocap_pose_stamped.header.stamp = current_time
         mocap_pose_stamped.header.frame_id = self.map_frame
         mocap_pose_stamped.pose = self.latest_mocap_pose
+	mocap_pose_stamped.pose.position.x = mocap_x
+	mocap_pose_stamped.pose.position.y = mocap_y
         self.mocap_path.poses.append(mocap_pose_stamped)
         self.mocap_path.header.stamp = current_time
         self.mocap_path_pub.publish(self.mocap_path)
@@ -181,6 +235,14 @@ class MocapComparer:
     def run(self):
         rospy.on_shutdown(self.shutdown_hook)
         rospy.spin()
+
+def rotate_2d_vector(x, y, angle_rad):
+    """
+    Rotates a 2D vector (x, y) by a given angle (in radians) around the origin.
+    """
+    new_x = x * math.cos(angle_rad) - y * math.sin(angle_rad)
+    new_y = x * math.sin(angle_rad) + y * math.cos(angle_rad)
+    return new_x, new_y
 
 if __name__ == '__main__':
     comparer = MocapComparer()
