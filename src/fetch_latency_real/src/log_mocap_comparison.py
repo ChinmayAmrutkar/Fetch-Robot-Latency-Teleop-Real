@@ -14,7 +14,7 @@ class MocapComparer:
         # --- CONFIGURATION ---
         mocap_object_name = 'Fetch1'
         self.mocap_topic = '/vrpn_client_node/{}/pose'.format(mocap_object_name)
-        self.log_file_path = os.path.join(os.path.expanduser('~'), 'amcl_vs_mocap_log.csv')
+        self.log_file_path = os.path.join(os.path.expanduser('~/chinmay/Fetch-Robot-Latency-Teleop-Real/data/'), 'amcl_vs_mocap_log.csv')
         
         # TF frames for AMCL's estimated pose
         self.map_frame = 'map'
@@ -107,7 +107,9 @@ class MocapComparer:
         mocap_delta_yaw = mocap_yaw - initial_mocap_yaw
         error_yaw = math.atan2(math.sin(amcl_delta_yaw - mocap_delta_yaw), math.cos(amcl_delta_yaw - mocap_delta_yaw))
 
-        rospy.loginfo("ERR [Dist:%.3f m, Yaw:%.3f rad]", error_dist, error_yaw)
+        # --- LOGGING TO TERMINAL ---
+        # This is the new log line you requested for monitoring
+        rospy.loginfo("AMCL [x:%.2f, y:%.2f] MOCAP [x:%.2f, y:%.2f] ERR [x:%.2f, y:%.2f]", amcl_x, amcl_y, mocap_x, mocap_y, error_x, error_y)
 
         # --- Write to CSV ---
         self.csv_writer.writerow([
@@ -131,4 +133,3 @@ class MocapComparer:
 if __name__ == '__main__':
     comparer = MocapComparer()
     comparer.run()
-
