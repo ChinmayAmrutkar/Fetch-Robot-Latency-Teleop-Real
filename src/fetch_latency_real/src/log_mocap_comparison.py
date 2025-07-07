@@ -16,6 +16,8 @@ class MocapComparer:
         mocap_object_name = 'Fetch1'
         self.mocap_topic = '/vrpn_client_node/{}/pose'.format(mocap_object_name)
         self.log_file_path = os.path.join(os.path.expanduser('~/chinmay/Fetch-Robot-Latency-Teleop-Real/data/'), 'amcl_vs_mocap_log.csv')
+        self.amcl_path_log_file = os.path.join(os.path.expanduser('~/chinmay/Fetch-Robot-Latency-Teleop-Real/data/'), 'amcl_path_log.csv')
+        self.mocap_path_log_file = os.path.join(os.path.expanduser('~/chinmay/Fetch-Robot-Latency-Teleop-Real/data/'), 'mocap_path_log.csv')
         
         # TF frames for AMCL's estimated pose
         self.map_frame = 'map'
@@ -142,8 +144,42 @@ class MocapComparer:
         self.mocap_path.header.stamp = current_time
         self.mocap_path_pub.publish(self.mocap_path)
 
+    def shutdown_hook(self):
+        """This function is called when the node is shut down (e.g., by Ctrl+C)"""
+        rospy.loginfo("Shutting down node and saving paths...")
+        # Close the main comparison log file
+        self.csv_file.close()
+
+        # --- Save AMCL Path ---
+        with open(self.amcl_path_log_file, 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(['x', 'y', 'yaw'])
+            for pose_stamped in self.amcl_path.poses:
+                _, _, yaw = euler_from_quaternion([
+                    pose_stamped.pose.orientation.x,
+                    pose_stamped.pose.orientation.y,
+                    pose_stamped.pose.orientation.z,
+                    pose_stamped.pose.orientation.w
+                ])
+                writer.writerow([pose_stamped.pose.position.x, pose_stamped.pose.position.y, yaw])
+        rospy.loginfo("Saved AMCL path to %s", self.amcl_path_log_file)
+
+        # --- Save Mocap Path ---
+        with open(self.mocap_path_log_file, 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(['x', 'y', 'yaw'])
+            for pose_stamped in self.mocap_path.poses:
+                _, _, yaw = euler_from_quaternion([
+                    pose_stamped.pose.orientation.x,
+                    pose_stamped.pose.orientation.y,
+                    pose_stamped.pose.orientation.z,
+                    pose_stamped.pose.orientation.w
+                ])
+                writer.writerow([pose_stamped.pose.position.x, pose_stamped.pose.position.y, yaw])
+        rospy.loginfo("Saved Mocap path to %s", self.mocap_path_log_file)
+
     def run(self):
-        rospy.on_shutdown(lambda: self.csv_file.close())
+        rospy.on_shutdown(self.shutdown_hook)
         rospy.spin()
 
 if __name__ == '__main__':
