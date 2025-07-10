@@ -28,7 +28,8 @@ class AdmittanceController:
         self.commanded_angular_vel = 0.0
 
         # --- Publishers and Subscribers ---
-        self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+        # In the __init__ method of AdmittanceController
+	self.cmd_vel_pub = rospy.Publisher('/admittance_vel', Twist, queue_size=1)
         rospy.Subscriber('/intent_vel', Twist, self.intent_callback)
         
         self.control_rate = rospy.Rate(50)
