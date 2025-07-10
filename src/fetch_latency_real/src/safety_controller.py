@@ -80,21 +80,26 @@ class SafetyController:
                 # UPDATED: Use deepcopy to prevent modifying the original message
                 current_cmd = copy.deepcopy(self.latest_admittance_cmd)
             
-            # Start with the assumption that the command is safe to pass through
-            final_cmd = current_cmd
-            
             # --- Safety Logic ---
             # Check for forward motion hazard
             if self.obstacle_in_front and current_cmd.linear.x > 0:
                 if not self.recovery_mode:
-                    rospy.logwarn("SAFETY STOP (FRONT): Obstacle detected at %.2f m.", self.min_front_dist)
+                    rospy.logwarn("SAFETY STOP (FRONT): Obstacle detected at %.2f m. Stopping immediately.", self.min_front_dist)
                 self.recovery_mode = True
+                # UPDATED: Publish a zero-velocity Twist immediately and skip the rest of the loop.
+                self.cmd_vel_pub.publish(Twist())
+                self.control_rate.sleep()
+                continue
             
             # Check for backward motion hazard
             elif self.obstacle_in_rear and current_cmd.linear.x < 0:
                 if not self.recovery_mode:
-                    rospy.logwarn("SAFETY STOP (REAR): Obstacle detected at %.2f m.", self.min_rear_dist)
+                    rospy.logwarn("SAFETY STOP (REAR): Obstacle detected at %.2f m. Stopping immediately.", self.min_rear_dist)
                 self.recovery_mode = True
+                # UPDATED: Publish a zero-velocity Twist immediately and skip the rest of the loop.
+                self.cmd_vel_pub.publish(Twist())
+                self.control_rate.sleep()
+                continue
 
             # --- Recovery Logic ---
             if self.recovery_mode:
@@ -111,7 +116,11 @@ class SafetyController:
                     final_cmd = current_cmd
                 else:
                     # If still in recovery mode, command a full stop.
-                    final_cmd = Twist() # This creates a Twist with all zeros
+                    # This is now redundant due to the 'continue' above, but acts as a failsafe.
+                    final_cmd = Twist()
+            else:
+                # If not in recovery mode, the command is safe to pass through.
+                final_cmd = current_cmd
 
             # Publish the final, safe command.
             self.cmd_vel_pub.publish(final_cmd)
