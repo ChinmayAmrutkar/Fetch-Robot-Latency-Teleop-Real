@@ -2,6 +2,8 @@
 import rospy
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
+import threading
+import copy # <-- ADDED: Import the copy module
 
 class SafetyController:
     def __init__(self):
@@ -14,8 +16,8 @@ class SafetyController:
         rospy.init_node('safety_controller')
 
         # --- Parameters ---
-        # The distance at which the robot will perform a safety stop.
-        self.STOP_DISTANCE = rospy.get_param("~stop_distance", 0.2) # meters
+        # UPDATED: Default stop distance is now 0.1m
+        self.STOP_DISTANCE = rospy.get_param("~stop_distance", 0.1) # meters
 
         # --- State Variables ---
         self.latest_admittance_cmd = Twist()
@@ -23,7 +25,8 @@ class SafetyController:
         self.obstacle_in_rear = False
         self.min_front_dist = float('inf')
         self.min_rear_dist = float('inf')
-        self.recovery_mode = False # A flag to indicate we are in a stopped state
+        self.recovery_mode = False
+        self.lock = threading.Lock() # For thread-safe access to latest_admittance_cmd
 
         # --- Publishers and Subscribers ---
         self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
@@ -36,21 +39,25 @@ class SafetyController:
 
     def admittance_cmd_callback(self, msg):
         """Stores the latest desired command from the admittance controller."""
-        self.latest_admittance_cmd = msg
+        with self.lock:
+            self.latest_admittance_cmd = msg
 
     def scan_callback(self, msg):
         """
         Processes the LiDAR scan data to detect nearby obstacles in both front and rear zones.
         """
+        # ADDED: Log scan info once for easier debugging on different systems
+        rospy.loginfo_once("Scan info: angle_min=%.2f, angle_max=%.2f, num_points=%d", msg.angle_min, msg.angle_max, len(msg.ranges))
+        
         num_points = len(msg.ranges)
         
-        # Define the front-facing cone (middle third of the scan)
-        front_start_index = num_points / 3
-        front_end_index = 2 * num_points / 3
+        # UPDATED: Use int() for robust list slicing in Python 2 & 3
+        front_start_index = int(num_points / 3)
+        front_end_index = int(2 * num_points / 3)
         front_scan = msg.ranges[front_start_index:front_end_index]
         
-        # Define the rear-facing cone (outer thirds of the scan)
-        rear_scan = msg.ranges[:num_points / 4] + msg.ranges[3 * num_points / 4:]
+        # UPDATED: Use int() for robust list slicing
+        rear_scan = msg.ranges[:int(num_points / 4)] + msg.ranges[int(3 * num_points / 4):]
 
         # Check for obstacles in the front
         self.min_front_dist = min([r for r in front_scan if r > 0.0] or [float('inf')])
@@ -69,41 +76,43 @@ class SafetyController:
     def run(self):
         """The main control loop of the node."""
         while not rospy.is_shutdown():
-            final_cmd = self.latest_admittance_cmd
+            with self.lock:
+                # UPDATED: Use deepcopy to prevent modifying the original message
+                current_cmd = copy.deepcopy(self.latest_admittance_cmd)
+            
+            # Start with the assumption that the command is safe to pass through
+            final_cmd = current_cmd
             
             # --- Safety Logic ---
-            # Check if we should enter a safety stop for forward motion.
-            if self.obstacle_in_front and self.latest_admittance_cmd.linear.x > 0:
+            # Check for forward motion hazard
+            if self.obstacle_in_front and current_cmd.linear.x > 0:
+                if not self.recovery_mode:
+                    rospy.logwarn("SAFETY STOP (FRONT): Obstacle detected at %.2f m.", self.min_front_dist)
                 self.recovery_mode = True
-                rospy.logwarn_throttle(1.0, "SAFETY STOP (FRONT): Obstacle detected at %.2f m. Stopping forward motion.", self.min_front_dist)
-                final_cmd.linear.x = 0.0
             
-            # Check if we should enter a safety stop for backward motion.
-            elif self.obstacle_in_rear and self.latest_admittance_cmd.linear.x < 0:
+            # Check for backward motion hazard
+            elif self.obstacle_in_rear and current_cmd.linear.x < 0:
+                if not self.recovery_mode:
+                    rospy.logwarn("SAFETY STOP (REAR): Obstacle detected at %.2f m.", self.min_rear_dist)
                 self.recovery_mode = True
-                rospy.logwarn_throttle(1.0, "SAFETY STOP (REAR): Obstacle detected at %.2f m. Stopping backward motion.", self.min_rear_dist)
-                final_cmd.linear.x = 0.0
-            
+
             # --- Recovery Logic ---
-            # If we are in recovery mode, we stay stopped until the user commands
-            # the robot to move away from the obstacle.
             if self.recovery_mode:
-                # If the front is blocked, we need a backward command to recover.
-                if self.obstacle_in_front and self.latest_admittance_cmd.linear.x < -0.01:
+                # To exit recovery, user must command motion AWAY from the obstacle
+                can_recover_front = self.obstacle_in_front and current_cmd.linear.x < -0.01
+                can_recover_rear = self.obstacle_in_rear and current_cmd.linear.x > 0.01
+                # Or, the obstacle must have moved away
+                obstacle_cleared = not self.obstacle_in_front and not self.obstacle_in_rear
+                
+                if can_recover_front or can_recover_rear or obstacle_cleared:
                     self.recovery_mode = False
                     rospy.loginfo("Recovery: Resuming normal operation.")
-                # If the rear is blocked, we need a forward command to recover.
-                elif self.obstacle_in_rear and self.latest_admittance_cmd.linear.x > 0.01:
-                    self.recovery_mode = False
-                    rospy.loginfo("Recovery: Resuming normal operation.")
-                # If the obstacle has simply moved away, we can recover.
-                elif not self.obstacle_in_front and not self.obstacle_in_rear:
-                    self.recovery_mode = False
-                    rospy.loginfo("Recovery: Obstacle cleared. Resuming normal operation.")
+                    # Pass the current (safe) command through
+                    final_cmd = current_cmd
                 else:
-                    # While in recovery, block all linear motion but allow turning.
-                    final_cmd.linear.x = 0.0
-            
+                    # If still in recovery mode, command a full stop.
+                    final_cmd = Twist() # This creates a Twist with all zeros
+
             # Publish the final, safe command.
             self.cmd_vel_pub.publish(final_cmd)
             self.control_rate.sleep()
