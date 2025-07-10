@@ -19,7 +19,10 @@ class SafetyController:
 
         # --- State Variables ---
         self.latest_admittance_cmd = Twist()
-        self.is_obstacle_near = False
+        self.obstacle_in_front = False
+        self.obstacle_in_rear = False
+        self.min_front_dist = float('inf')
+        self.min_rear_dist = float('inf')
         self.recovery_mode = False # A flag to indicate we are in a stopped state
 
         # --- Publishers and Subscribers ---
@@ -37,52 +40,70 @@ class SafetyController:
 
     def scan_callback(self, msg):
         """
-        Processes the LiDAR scan data to detect nearby obstacles.
+        Processes the LiDAR scan data to detect nearby obstacles in both front and rear zones.
         """
-        # We check a forward-facing cone of the laser scan data.
-        # The Fetch LiDAR has 666 points. We check the middle third.
         num_points = len(msg.ranges)
-        start_index = num_points / 3
-        end_index = 2 * num_points / 3
         
-        forward_scan = msg.ranges[start_index:end_index]
+        # Define the front-facing cone (middle third of the scan)
+        front_start_index = num_points / 3
+        front_end_index = 2 * num_points / 3
+        front_scan = msg.ranges[front_start_index:front_end_index]
         
-        # Check if any point in the forward scan is less than our stop distance.
-        # We ignore ranges that are 0.0, as they are invalid readings.
-        min_forward_distance = min([r for r in forward_scan if r > 0.0] or [float('inf')])
+        # Define the rear-facing cone (outer thirds of the scan)
+        rear_scan = msg.ranges[:num_points / 4] + msg.ranges[3 * num_points / 4:]
 
-        if min_forward_distance < self.STOP_DISTANCE:
-            self.is_obstacle_near = True
+        # Check for obstacles in the front
+        self.min_front_dist = min([r for r in front_scan if r > 0.0] or [float('inf')])
+        if self.min_front_dist < self.STOP_DISTANCE:
+            self.obstacle_in_front = True
         else:
-            self.is_obstacle_near = False
+            self.obstacle_in_front = False
+
+        # Check for obstacles in the rear
+        self.min_rear_dist = min([r for r in rear_scan if r > 0.0] or [float('inf')])
+        if self.min_rear_dist < self.STOP_DISTANCE:
+            self.obstacle_in_rear = True
+        else:
+            self.obstacle_in_rear = False
 
     def run(self):
         """The main control loop of the node."""
         while not rospy.is_shutdown():
-            final_cmd = Twist()
+            final_cmd = self.latest_admittance_cmd
             
             # --- Safety Logic ---
-            # Check if we should enter a safety stop.
-            # We stop if an obstacle is near AND the user is trying to move forward.
-            if self.is_obstacle_near and self.latest_admittance_cmd.linear.x > 0:
+            # Check if we should enter a safety stop for forward motion.
+            if self.obstacle_in_front and self.latest_admittance_cmd.linear.x > 0:
                 self.recovery_mode = True
-                rospy.logwarn_throttle(1.0, "SAFETY STOP: Obstacle detected at %.2f m. Stopping forward motion.", min([r for r in rospy.wait_for_message('/base_scan', LaserScan).ranges if r > 0.0]))
+                rospy.logwarn_throttle(1.0, "SAFETY STOP (FRONT): Obstacle detected at %.2f m. Stopping forward motion.", self.min_front_dist)
+                final_cmd.linear.x = 0.0
+            
+            # Check if we should enter a safety stop for backward motion.
+            elif self.obstacle_in_rear and self.latest_admittance_cmd.linear.x < 0:
+                self.recovery_mode = True
+                rospy.logwarn_throttle(1.0, "SAFETY STOP (REAR): Obstacle detected at %.2f m. Stopping backward motion.", self.min_rear_dist)
+                final_cmd.linear.x = 0.0
             
             # --- Recovery Logic ---
             # If we are in recovery mode, we stay stopped until the user commands
-            # the robot to move backward (away from the obstacle).
+            # the robot to move away from the obstacle.
             if self.recovery_mode:
-                # If the obstacle is gone OR the user is backing up, exit recovery mode.
-                if not self.is_obstacle_near or self.latest_admittance_cmd.linear.x < 0:
+                # If the front is blocked, we need a backward command to recover.
+                if self.obstacle_in_front and self.latest_admittance_cmd.linear.x < -0.01:
                     self.recovery_mode = False
                     rospy.loginfo("Recovery: Resuming normal operation.")
+                # If the rear is blocked, we need a forward command to recover.
+                elif self.obstacle_in_rear and self.latest_admittance_cmd.linear.x > 0.01:
+                    self.recovery_mode = False
+                    rospy.loginfo("Recovery: Resuming normal operation.")
+                # If the obstacle has simply moved away, we can recover.
+                elif not self.obstacle_in_front and not self.obstacle_in_rear:
+                    self.recovery_mode = False
+                    rospy.loginfo("Recovery: Obstacle cleared. Resuming normal operation.")
                 else:
-                    # While in recovery, only allow turning, not forward motion.
-                    final_cmd.angular.z = self.latest_admittance_cmd.angular.z
-            else:
-                # If not in recovery mode, pass the command through.
-                final_cmd = self.latest_admittance_cmd
-
+                    # While in recovery, block all linear motion but allow turning.
+                    final_cmd.linear.x = 0.0
+            
             # Publish the final, safe command.
             self.cmd_vel_pub.publish(final_cmd)
             self.control_rate.sleep()
