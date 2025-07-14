@@ -1,135 +1,128 @@
 #!/usr/bin/env python
 import rospy
+import copy
+import math
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 import threading
-import copy # <-- ADDED: Import the copy module
 
 class SafetyController:
     def __init__(self):
-        """
-        Initializes the Safety Controller node.
-        - Listens to desired velocity from the admittance controller.
-        - Listens to LiDAR scans for obstacle detection.
-        - Publishes safe velocity commands to the robot's base.
-        """
         rospy.init_node('safety_controller')
 
-        # --- Parameters ---
-        # UPDATED: Default stop distance is now 0.1m
-        self.STOP_DISTANCE = rospy.get_param("~stop_distance", 0.1) # meters
+        # === PARAMETERS ===
+        # Stop if obstacle closer than this (meters)
+        self.STOP_DISTANCE = rospy.get_param("~stop_distance", 0.1)
 
-        # --- State Variables ---
-        self.latest_admittance_cmd = Twist()
+        # Cone half‐width around front/rear (degrees)
+        self.FRONT_ANGLE_DEG = rospy.get_param("~front_cone_deg", 30.0)
+        self.REAR_ANGLE_DEG = rospy.get_param("~rear_cone_deg", 30.0)
+
+        # Topics
+        self.admittance_topic = rospy.get_param("~admittance_topic", "/admittance_vel")
+        self.scan_topic       = rospy.get_param("~scan_topic",       "/base_scan")
+        self.cmd_vel_topic    = rospy.get_param("~cmd_vel_topic",    "/cmd_vel")
+
+        # === STATE ===
+        self.latest_adm_cmd = Twist()
         self.obstacle_in_front = False
-        self.obstacle_in_rear = False
+        self.obstacle_in_rear  = False
         self.min_front_dist = float('inf')
-        self.min_rear_dist = float('inf')
-        self.recovery_mode = False
-        self.lock = threading.Lock() # For thread-safe access to latest_admittance_cmd
+        self.min_rear_dist  = float('inf')
+        self.recovery_mode  = False
+        self.lock = threading.Lock()
 
-        # --- Publishers and Subscribers ---
-        self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
-        rospy.Subscriber('/admittance_vel', Twist, self.admittance_cmd_callback)
-        rospy.Subscriber('/base_scan', LaserScan, self.scan_callback)
+        # === I/O ===
+        self.cmd_pub = rospy.Publisher(self.cmd_vel_topic, Twist, queue_size=1)
+        rospy.Subscriber(self.admittance_topic, Twist, self.adm_cb)
+        rospy.Subscriber(self.scan_topic, LaserScan, self.scan_cb)
 
-        # --- Main Control Loop ---
-        self.control_rate = rospy.Rate(50) # 50 Hz
-        rospy.loginfo("Safety Controller initialized. Stop distance: %.2f m", self.STOP_DISTANCE)
+        self.rate = rospy.Rate(50)
+        rospy.loginfo("SafetyController: stop_distance=%.2f, front_cone=±%.1f°, rear_cone=±%.1f°",
+                      self.STOP_DISTANCE, self.FRONT_ANGLE_DEG, self.REAR_ANGLE_DEG)
 
-    def admittance_cmd_callback(self, msg):
-        """Stores the latest desired command from the admittance controller."""
+    def adm_cb(self, msg):
         with self.lock:
-            self.latest_admittance_cmd = msg
+            self.latest_adm_cmd = msg
 
-    def scan_callback(self, msg):
-        """
-        Processes the LiDAR scan data to detect nearby obstacles in both front and rear zones.
-        """
-        # ADDED: Log scan info once for easier debugging on different systems
-        rospy.loginfo_once("Scan info: angle_min=%.2f, angle_max=%.2f, num_points=%d", msg.angle_min, msg.angle_max, len(msg.ranges))
-        
-        num_points = len(msg.ranges)
-        
-        # UPDATED: Use int() for robust list slicing in Python 2 & 3
-        front_start_index = int(num_points / 3)
-        front_end_index = int(2 * num_points / 3)
-        front_scan = msg.ranges[front_start_index:front_end_index]
-        
-        # UPDATED: Use int() for robust list slicing
-        rear_scan = msg.ranges[:int(num_points / 4)] + msg.ranges[int(3 * num_points / 4):]
+    def scan_cb(self, scan):
+        # Convert cones into index ranges
+        angle_min = scan.angle_min
+        angle_inc = scan.angle_increment
+        n = len(scan.ranges)
 
-        # Check for obstacles in the front
-        self.min_front_dist = min([r for r in front_scan if r > 0.0] or [float('inf')])
-        if self.min_front_dist < self.STOP_DISTANCE:
-            self.obstacle_in_front = True
-        else:
-            self.obstacle_in_front = False
+        # Front: ±FRONT_ANGLE_DEG around 0
+        fa = math.radians(self.FRONT_ANGLE_DEG)
+        i_front_start = int(max(0, (0 - fa - angle_min) / angle_inc))
+        i_front_end   = int(min(n, (0 + fa - angle_min) / angle_inc))
 
-        # Check for obstacles in the rear
-        self.min_rear_dist = min([r for r in rear_scan if r > 0.0] or [float('inf')])
-        if self.min_rear_dist < self.STOP_DISTANCE:
-            self.obstacle_in_rear = True
-        else:
-            self.obstacle_in_rear = False
+        # Rear: ±REAR_ANGLE_DEG around π (or -π)
+        ra = math.radians(self.REAR_ANGLE_DEG)
+        # Normalize angles to [angle_min, angle_max]
+        rear_center = math.pi if scan.angle_max >= math.pi else -math.pi
+        i_rear_start = int(max(0, (rear_center - ra - angle_min) / angle_inc))
+        i_rear_end   = int(min(n, (rear_center + ra - angle_min) / angle_inc))
+
+        front_ranges = [r for r in scan.ranges[i_front_start:i_front_end] if r > 0]
+        rear_ranges  = [r for r in scan.ranges[i_rear_start:i_rear_end] if r > 0]
+
+        self.min_front_dist = min(front_ranges or [float('inf')])
+        self.min_rear_dist  = min(rear_ranges  or [float('inf')])
+
+        self.obstacle_in_front = (self.min_front_dist < self.STOP_DISTANCE)
+        self.obstacle_in_rear  = (self.min_rear_dist  < self.STOP_DISTANCE)
+
+        rospy.logdebug("Scan→ front_min=%.3f, rear_min=%.3f", self.min_front_dist, self.min_rear_dist)
 
     def run(self):
-        """The main control loop of the node."""
         while not rospy.is_shutdown():
             with self.lock:
-                # UPDATED: Use deepcopy to prevent modifying the original message
-                current_cmd = copy.deepcopy(self.latest_admittance_cmd)
-            
-            # --- Safety Logic ---
-            # Check for forward motion hazard
-            if self.obstacle_in_front and current_cmd.linear.x > 0:
+                cmd = copy.deepcopy(self.latest_adm_cmd)
+
+            # --- FORWARD HAZARD ---
+            if self.obstacle_in_front and cmd.linear.x > 0:
                 if not self.recovery_mode:
-                    rospy.logwarn("SAFETY STOP (FRONT): Obstacle detected at %.2f m. Stopping immediately.", self.min_front_dist)
+                    rospy.logwarn("SAFETY STOP FRONT: obstacle at %.2f m → ZERO CMD", self.min_front_dist)
                 self.recovery_mode = True
-                # UPDATED: Publish a zero-velocity Twist immediately and skip the rest of the loop.
-                self.cmd_vel_pub.publish(Twist())
-                self.control_rate.sleep()
-                continue
-            
-            # Check for backward motion hazard
-            elif self.obstacle_in_rear and current_cmd.linear.x < 0:
-                if not self.recovery_mode:
-                    rospy.logwarn("SAFETY STOP (REAR): Obstacle detected at %.2f m. Stopping immediately.", self.min_rear_dist)
-                self.recovery_mode = True
-                # UPDATED: Publish a zero-velocity Twist immediately and skip the rest of the loop.
-                self.cmd_vel_pub.publish(Twist())
-                self.control_rate.sleep()
+                # immediate and continuous full stop
+                self.cmd_pub.publish(Twist())
+                self.rate.sleep()
                 continue
 
-            # --- Recovery Logic ---
+            # --- REAR HAZARD ---
+            if self.obstacle_in_rear and cmd.linear.x < 0:
+                if not self.recovery_mode:
+                    rospy.logwarn("SAFETY STOP REAR: obstacle at %.2f m → ZERO CMD", self.min_rear_dist)
+                self.recovery_mode = True
+                self.cmd_pub.publish(Twist())
+                self.rate.sleep()
+                continue
+
+            # --- RECOVERY MODE EXIT CONDITIONS ---
             if self.recovery_mode:
-                # To exit recovery, user must command motion AWAY from the obstacle
-                can_recover_front = self.obstacle_in_front and current_cmd.linear.x < -0.01
-                can_recover_rear = self.obstacle_in_rear and current_cmd.linear.x > 0.01
-                # Or, the obstacle must have moved away
-                obstacle_cleared = not self.obstacle_in_front and not self.obstacle_in_rear
-                
-                if can_recover_front or can_recover_rear or obstacle_cleared:
-                    self.recovery_mode = False
-                    rospy.loginfo("Recovery: Resuming normal operation.")
-                    # Pass the current (safe) command through
-                    final_cmd = current_cmd
-                else:
-                    # If still in recovery mode, command a full stop.
-                    # This is now redundant due to the 'continue' above, but acts as a failsafe.
-                    final_cmd = Twist()
-            else:
-                # If not in recovery mode, the command is safe to pass through.
-                final_cmd = current_cmd
+                # to recover front, need backward intent
+                can_recover_front = self.obstacle_in_front and cmd.linear.x < -0.01
+                # to recover rear, need forward intent
+                can_recover_rear  = self.obstacle_in_rear  and cmd.linear.x >  0.01
+                cleared = not self.obstacle_in_front and not self.obstacle_in_rear
 
-            # Publish the final, safe command.
-            self.cmd_vel_pub.publish(final_cmd)
-            self.control_rate.sleep()
+                if can_recover_front or can_recover_rear or cleared:
+                    self.recovery_mode = False
+                    rospy.loginfo("SafetyController: recovered, resuming operation.")
+                else:
+                    # still blocked → keep zero command
+                    self.cmd_pub.publish(Twist())
+                    self.rate.sleep()
+                    continue
+
+            # --- SAFE TO PASS THROUGH ---
+            self.cmd_pub.publish(cmd)
+            self.rate.sleep()
 
 if __name__ == '__main__':
     try:
-        controller = SafetyController()
-        controller.run()
+        sc = SafetyController()
+        sc.run()
     except rospy.ROSInterruptException:
         pass
 
