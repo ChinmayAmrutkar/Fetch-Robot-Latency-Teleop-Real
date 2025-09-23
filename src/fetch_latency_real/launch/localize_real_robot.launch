@@ -8,8 +8,6 @@
     <!-- Argument for the map file, pointing to your package -->
     <arg name="map_file" default="$(find fetch_latency_real)/maps/my_lab_map.yaml"/>
 
-    <!-- 1. Start the physical Fetch robot drivers -->
-    <include file="$(find fetch_bringup)/launch/fetch.launch"/>
 
     <!-- 2. Run the map server to load the map -->
     <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)" />

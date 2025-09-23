@@ -3,6 +3,8 @@
       the gmapping SLAM algorithm, and RViz with a pre-set configuration
       to build a map of a new environment.-->
 
+    <!-- 1. Start the physical Fetch robot drivers -->
+    <include file="$(find fetch_bringup)/launch/fetch.launch"/>
 
     <!-- 2. Run the GMapping SLAM node -->
     <node name="slam_gmapping" pkg="gmapping" type="slam_gmapping" output="screen">

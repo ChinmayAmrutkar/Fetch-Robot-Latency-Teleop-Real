@@ -10,7 +10,7 @@ class CameraDelayNode:
         rospy.init_node('delayed_camera_node')
 
         # Get the desired delay from the launch file parameter
-        self.delay_duration = rospy.Duration.from_sec(rospy.get_param("~delay_seconds", 0.5))
+        self.delay_duration = rospy.Duration.from_sec(rospy.get_param("~delay_seconds", 0.01))
 
         # --- The core of the new logic ---
         # A deque is a list-like object optimized for adding and removing items from its ends.
